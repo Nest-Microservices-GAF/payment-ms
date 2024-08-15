@@ -1,17 +1,23 @@
-import { Injectable } from '@nestjs/common';
-import { envs } from 'src/config';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { envs, NATS_SERVICE } from 'src/config';
 import Stripe from 'stripe';
 import { PaymentSessionDto } from './dto/payment-session.dto';
 import { Request, Response } from 'express';
+import { ClientProxy } from '@nestjs/microservices';
 
 @Injectable()
 export class PaymentsService {
     
-    
+    private readonly logger = new Logger('PaymentService')
     private readonly stripe = new Stripe(envs.stripeSecret)
     
-   async createPaymentSession(paymentSessionDto:PaymentSessionDto) {
 
+    constructor(
+      @Inject(NATS_SERVICE) private readonly client: ClientProxy
+    ){}
+
+   async createPaymentSession(paymentSessionDto:PaymentSessionDto) {
+    console.log('llega aca createPaymentSession ,',paymentSessionDto)
     const {currency, items, orderId}=paymentSessionDto
 
     const lineItems = items.map((item) => {
@@ -39,7 +45,12 @@ export class PaymentsService {
         cancel_url: envs.stripeCancelUrl
       })
 
-      return session
+      
+      return {
+        cancelUrl: session.cancel_url,
+        successUrl: session.success_url,
+        url: session.url
+      }
     }
 
 
@@ -60,10 +71,18 @@ export class PaymentsService {
       switch (event.type) {
         case 'charge.succeeded':
           const chargeSucceeded = event.data.object
-          console.log({ 
-            metadata: chargeSucceeded.metadata,
-            orderId: chargeSucceeded.metadata.orderId
-          })
+          const payload = {
+            stripePaymentId: chargeSucceeded.id,
+            orderId: chargeSucceeded.metadata.orderId,
+            receiptUrl: chargeSucceeded.receipt_url
+          }
+
+          // console.log({ 
+          //   metadata: chargeSucceeded.metadata,
+          //   orderId: chargeSucceeded.metadata.orderId
+          // })
+          // this.logger.log({payload})
+          this.client.emit('payment.succeeded', payload)
           break;
       
         default:
